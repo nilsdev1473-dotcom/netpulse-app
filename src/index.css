@@ -1,0 +1,234 @@
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================================
+   CSS VARIABLES — NetPulse Design System
+   ============================================================ */
+:root {
+  /* Backgrounds */
+  --bg: #080809;
+  --surface: #0f0f12;
+  --surface-raised: #161619;
+
+  /* Borders */
+  --border: rgba(255, 255, 255, 0.07);
+
+  /* Accent colors */
+  --cyan: #00e5ff;
+  --success: #00ff87;
+  --warning: #ffaa00;
+  --danger: #ff4455;
+
+  /* Typography */
+  --mono: 'JetBrains Mono', 'Courier New', monospace;
+  --sans: Inter, Avenir, Helvetica, Arial, sans-serif;
+
+  /* Text */
+  --text-primary: rgba(255, 255, 255, 0.92);
+  --text-secondary: rgba(255, 255, 255, 0.55);
+  --text-muted: rgba(255, 255, 255, 0.28);
+
+  /* Base */
+  font-family: var(--sans);
+  font-size: 16px;
+  line-height: 1.5;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ============================================================
+   BASE RESET
+   ============================================================ */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body, #root {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text-primary);
+}
+
+/* Mono font utility */
+.font-mono {
+  font-family: var(--mono) !important;
+}
+
+/* ============================================================
+   GAUGE GLOW ANIMATIONS
+   ============================================================ */
+@keyframes gauge-pulse {
+  0%, 100% {
+    filter: drop-shadow(0 0 4px var(--cyan)) drop-shadow(0 0 8px var(--cyan));
+  }
+  50% {
+    filter: drop-shadow(0 0 8px var(--cyan)) drop-shadow(0 0 20px var(--cyan)) drop-shadow(0 0 40px var(--cyan));
+  }
+}
+
+@keyframes gauge-pulse-success {
+  0%, 100% {
+    filter: drop-shadow(0 0 4px var(--success)) drop-shadow(0 0 8px var(--success));
+  }
+  50% {
+    filter: drop-shadow(0 0 8px var(--success)) drop-shadow(0 0 20px var(--success)) drop-shadow(0 0 40px var(--success));
+  }
+}
+
+.gauge-glow-cyan {
+  animation: gauge-pulse 3s ease-in-out infinite;
+}
+
+.gauge-glow-success {
+  animation: gauge-pulse-success 3s ease-in-out infinite;
+}
+
+/* ============================================================
+   CPU ARCHITECTURE ANIMATION — Loading States
+   (from 21st.dev prompt library)
+   ============================================================ */
+@keyframes animation-path {
+  0% {
+    stroke-dashoffset: 400;
+    opacity: 0;
+  }
+  10% {
+    opacity: 1;
+  }
+  80% {
+    opacity: 1;
+  }
+  100% {
+    stroke-dashoffset: 0;
+    opacity: 0;
+  }
+}
+
+.cpu-line-1 {
+  stroke-dasharray: 400;
+  stroke-dashoffset: 400;
+  animation: animation-path 2.4s ease-in-out infinite;
+  animation-delay: 0s;
+}
+
+.cpu-line-2 {
+  stroke-dasharray: 400;
+  stroke-dashoffset: 400;
+  animation: animation-path 2.4s ease-in-out infinite;
+  animation-delay: 0.3s;
+}
+
+.cpu-line-3 {
+  stroke-dasharray: 400;
+  stroke-dashoffset: 400;
+  animation: animation-path 2.4s ease-in-out infinite;
+  animation-delay: 0.6s;
+}
+
+.cpu-line-4 {
+  stroke-dasharray: 400;
+  stroke-dashoffset: 400;
+  animation: animation-path 2.4s ease-in-out infinite;
+  animation-delay: 0.9s;
+}
+
+.cpu-line-5 {
+  stroke-dasharray: 400;
+  stroke-dashoffset: 400;
+  animation: animation-path 2.4s ease-in-out infinite;
+  animation-delay: 1.2s;
+}
+
+.cpu-line-6 {
+  stroke-dasharray: 400;
+  stroke-dashoffset: 400;
+  animation: animation-path 2.4s ease-in-out infinite;
+  animation-delay: 1.5s;
+}
+
+.cpu-line-7 {
+  stroke-dasharray: 400;
+  stroke-dashoffset: 400;
+  animation: animation-path 2.4s ease-in-out infinite;
+  animation-delay: 1.8s;
+}
+
+.cpu-line-8 {
+  stroke-dasharray: 400;
+  stroke-dashoffset: 400;
+  animation: animation-path 2.4s ease-in-out infinite;
+  animation-delay: 2.1s;
+}
+
+/* ============================================================
+   SCROLLBAR — custom dark style
+   ============================================================ */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--surface);
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 2px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+/* ============================================================
+   TAILWIND DARK MODE OVERRIDES
+   ============================================================ */
+@layer base {
+  .dark {
+    color-scheme: dark;
+    --tw-bg-opacity: 1;
+    background-color: var(--bg);
+  }
+}
+
+@layer utilities {
+  /* Custom text colors */
+  .text-netpulse-cyan {
+    color: var(--cyan);
+  }
+  .text-netpulse-success {
+    color: var(--success);
+  }
+  .text-netpulse-warning {
+    color: var(--warning);
+  }
+  .text-netpulse-danger {
+    color: var(--danger);
+  }
+
+  /* Surface utilities */
+  .bg-surface {
+    background-color: var(--surface);
+  }
+  .bg-surface-raised {
+    background-color: var(--surface-raised);
+  }
+  .border-netpulse {
+    border-color: var(--border);
+  }
+
+  /* Mono font */
+  .font-jetbrains {
+    font-family: var(--mono);
+  }
+}

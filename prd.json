@@ -1,0 +1,36 @@
+{
+  "project": "NetPulse Mac App",
+  "vision": "The network monitor a serious operator would actually use",
+  "platform": "macOS via Tauri v2 (Rust + React + TypeScript)",
+  "delivery": "GitHub → GitHub Actions CI → .dmg download from Releases",
+  "stories": [
+    {
+      "id": 0,
+      "title": "Tauri Rust backend — system network data",
+      "description": "src-tauri/src/main.rs: Implement Tauri commands: get_network_stats() returning real bytes/sec per interface using sysinfo crate, get_active_connections() using std::process::Command netstat, get_ip_info() calling ip-api.com, get_download_speed() timing a 5MB Cloudflare fetch. All as async Tauri commands callable from frontend.",
+      "complexity": "high",
+      "model": "sonnet"
+    },
+    {
+      "id": 1,
+      "title": "React frontend — single screen layout",
+      "description": "Replace src/App.tsx with the full single-screen layout per DESIGN_SYSTEM.md. Three zones. Import Liquid Glass + Metal buttons from components/. All data fetched via Tauri invoke() calls to Rust backend.",
+      "complexity": "high",
+      "model": "sonnet"
+    },
+    {
+      "id": 2,
+      "title": "Design components — from prompt library",
+      "description": "Create src/components/ui/LiquidGlassButton.tsx, MetalButton.tsx, SpeedGauge.tsx (SVG arc), SpeedGraph.tsx (canvas real-time line). All from the 21st.dev design prompt library already provided.",
+      "complexity": "medium",
+      "model": "sonnet"
+    },
+    {
+      "id": 3,
+      "title": "GitHub Actions CI — Mac build pipeline",
+      "description": "Create .github/workflows/build-mac.yml that: on push to main, runs on macos-latest, installs Rust + Tauri deps, runs npm run tauri build, uploads the .dmg as a GitHub Release artifact. This is the delivery mechanism.",
+      "complexity": "medium",
+      "model": "sonnet"
+    }
+  ]
+}
