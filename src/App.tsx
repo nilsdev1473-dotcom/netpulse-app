@@ -116,6 +116,7 @@ export default function App() {
   // Network stats
   const [rxSpeed, setRxSpeed] = useState(0);
   const [txSpeed, setTxSpeed] = useState(0);
+  const prevBytesRef = useRef<{ rx: number; tx: number; t: number }>({ rx: 0, tx: 0, t: 0 });
   const [rxHistory, setRxHistory] = useState<number[]>(Array(60).fill(0));
 
   // IP / VPN
@@ -127,16 +128,44 @@ export default function App() {
   // Speed test
   const [speedResult, setSpeedResult] = useState<number | null>(null);
   const [measuring, setMeasuring] = useState(false);
+  
+  interface ProcessNetStat {
+    pid: number;
+    name: string;
+    rx_bytes_per_sec: number;
+    tx_bytes_per_sec: number;
+    connections: number;
+    icon_path: string | null;
+  }
+  const [processes, setProcesses] = useState<ProcessNetStat[]>([]);
 
   // ── Fetch network stats every 500ms ────────────────────────────────────────
   const fetchStats = useCallback(async () => {
     const result = await safeInvoke<NetworkInterface[]>("get_network_stats");
     const ifaces = result ?? PLACEHOLDER_INTERFACES;
     const primary = getPrimaryInterface(ifaces);
-    setRxSpeed(primary.rx_speed_mbps);
-    setTxSpeed(primary.tx_speed_mbps);
+    
+    // Compute real-time speed from byte deltas
+    const now = Date.now();
+    const prev = prevBytesRef.current;
+    const elapsed = prev.t > 0 ? (now - prev.t) / 1000 : 0;
+    
+    let rxMbps = 0;
+    let txMbps = 0;
+    
+    if (elapsed > 0.1 && prev.t > 0) {
+      const rxDelta = Math.max(0, primary.bytes_received - prev.rx);
+      const txDelta = Math.max(0, primary.bytes_transmitted - prev.tx);
+      rxMbps = parseFloat(((rxDelta * 8) / (elapsed * 1_000_000)).toFixed(2));
+      txMbps = parseFloat(((txDelta * 8) / (elapsed * 1_000_000)).toFixed(2));
+    }
+    
+    prevBytesRef.current = { rx: primary.bytes_received, tx: primary.bytes_transmitted, t: now };
+    
+    setRxSpeed(rxMbps);
+    setTxSpeed(txMbps);
     setRxHistory((prev) => {
-      const next = [...prev.slice(-59), primary.rx_speed_mbps];
+      const next = [...prev.slice(-59), rxMbps];
       return next;
     });
   }, []);
@@ -180,14 +209,37 @@ export default function App() {
     setMeasuring(false);
   };
 
-  // ── Title bar close ────────────────────────────────────────────────────────
+  // ── Process network monitor ──────────────────────────────────────────────
+  useEffect(() => {
+    const poll = async () => {
+      const procs = await safeInvoke<ProcessNetStat[]>('get_process_network_stats', {});
+      if (procs && procs.length > 0) setProcesses(procs.slice(0, 12));
+    };
+    poll();
+    const t = setInterval(poll, 5000);
+    return () => clearInterval(t);
+  }, []);
+
+  // ── Title bar controls ────────────────────────────────────────────────────
   const handleClose = async () => {
     try {
       const { getCurrentWindow } = await import("@tauri-apps/api/window");
       await getCurrentWindow().close();
-    } catch {
-      // web dev mode — no-op
-    }
+    } catch {}
+  };
+  const handleMinimize = async () => {
+    try {
+      const { getCurrentWindow } = await import("@tauri-apps/api/window");
+      await getCurrentWindow().minimize();
+    } catch {}
+  };
+  const handleMaximize = async () => {
+    try {
+      const { getCurrentWindow } = await import("@tauri-apps/api/window");
+      const win = getCurrentWindow();
+      const isMax = await win.isMaximized();
+      if (isMax) await win.unmaximize(); else await win.maximize();
+    } catch {}
   };
 
   // ─── Render ────────────────────────────────────────────────────────────────
@@ -206,7 +258,7 @@ export default function App() {
       }}
     >
       {/* ── Custom Title Bar ─────────────────────────────────────────────── */}
-      <TitleBar onClose={handleClose} />
+      <TitleBar onClose={handleClose} onMinimize={handleMinimize} onMaximize={handleMaximize} />
 
       {/* ── Main Content ─────────────────────────────────────────────────── */}
       <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
@@ -271,7 +323,7 @@ export default function App() {
               confidence={ipInfo.vpn_confidence}
               reason={
                 ipInfo.vpn_detected
-                  ? `Anomaly detected — ${Math.round(ipInfo.vpn_confidence * 100)}% confidence`
+                  ? `Anomaly detected — ${Math.round(ipInfo.vpn_confidence)}% confidence`
                   : "Direct connection verified"
               }
             />
@@ -365,6 +417,18 @@ export default function App() {
             }}
           >
             <ZoneLabel>FLOW</ZoneLabel>
+          {/* Process network usage */}
+          {processes.length > 0 && (
+            <div style={{ marginBottom: 8, padding: '4px 0', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+              <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.3)', letterSpacing: '0.1em', marginBottom: 4 }}>TOP PROCESSES</div>
+              {processes.slice(0, 5).map((p) => (
+                <div key={p.pid} style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', fontSize: 11, fontFamily: 'monospace' }}>
+                  <span style={{ color: 'rgba(255,255,255,0.7)', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '60%' }}>{p.name}</span>
+                  <span style={{ color: '#00E5FF' }}>{p.connections} conn</span>
+                </div>
+              ))}
+            </div>
+          )}
 
             {/* Header row */}
             <div
@@ -425,7 +489,7 @@ export default function App() {
 
 // ─── Sub-components ──────────────────────────────────────────────────────────
 
-function TitleBar({ onClose }: { onClose: () => void }) {
+function TitleBar({ onClose, onMinimize, onMaximize }: { onClose: () => void; onMinimize: () => void; onMaximize: () => void }) {
   return (
     <div
       style={{
@@ -441,7 +505,6 @@ function TitleBar({ onClose }: { onClose: () => void }) {
         flexShrink: 0,
       }}
     >
-      {/* App name */}
       <span
         style={{
           fontSize: 11,
@@ -464,9 +527,9 @@ function TitleBar({ onClose }: { onClose: () => void }) {
           WebkitAppRegion: "no-drag",
         }}
       >
-        <TrafficDot color="#FF4455" title="Close" onClick={onClose} />
-        <TrafficDot color="#FFAA00" title="Minimize" onClick={() => {}} />
-        <TrafficDot color="#00FF87" title="Maximize" onClick={() => {}} />
+        <TrafficDot color="#FF5F56" title="Close" onClick={onClose} />
+        <TrafficDot color="#FFBD2E" title="Minimize" onClick={onMinimize} />
+        <TrafficDot color="#27C93F" title="Maximize" onClick={onMaximize} />
       </div>
     </div>
   );

@@ -159,7 +159,7 @@ async fn measure_download_speed() -> f64 {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![
+        .invoke_handler(tauri::generate_handler![get_process_network_stats, 
             get_network_stats,
             get_active_connections,
             get_ip_info,
@@ -167,4 +167,118 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[derive(serde::Serialize, Clone)]
+pub struct ProcessNetStat {
+    pub pid: u32,
+    pub name: String,
+    pub rx_bytes_per_sec: f64,
+    pub tx_bytes_per_sec: f64,
+    pub connections: u32,
+    pub icon_path: Option<String>,
+}
+
+#[tauri::command]
+async fn get_process_network_stats() -> Vec<ProcessNetStat> {
+    // Use nettop for per-process network stats (macOS only, no root needed)
+    let output = std::process::Command::new("nettop")
+        .args(["-P", "-L", "1", "-k", "time,interface,state,rx_dupe,rx_ooo,re-tx,rtt_avg,rcvsize,tx_win,tc_class,tc_mgt,cc_algo,P,arch,piduid,rx_bytes,tx_bytes,conn_count"])
+        .output();
+    
+    let mut results: Vec<ProcessNetStat> = Vec::new();
+    
+    if let Ok(output) = output {
+        let text = String::from_utf8_lossy(&output.stdout);
+        let mut lines = text.lines();
+        
+        // Skip header lines (first 2)
+        lines.next(); lines.next();
+        
+        for line in lines.take(20) {
+            let parts: Vec<&str> = line.split(',').collect();
+            if parts.len() < 4 { continue; }
+            
+            let name = parts.get(0).unwrap_or(&"").trim().to_string();
+            if name.is_empty() || name == "nettop" { continue; }
+            
+            // Try to parse PID from name (format: "ProcessName.PID")
+            let (proc_name, pid) = if let Some(dot_pos) = name.rfind('.') {
+                let pid_str = &name[dot_pos+1..];
+                if let Ok(p) = pid_str.parse::<u32>() {
+                    (name[..dot_pos].to_string(), p)
+                } else {
+                    (name.clone(), 0)
+                }
+            } else {
+                (name.clone(), 0)
+            };
+            
+            // Find app icon path
+            let icon_path = find_app_icon(&proc_name);
+            
+            results.push(ProcessNetStat {
+                pid,
+                name: proc_name,
+                rx_bytes_per_sec: 0.0, // nettop parsing is complex, use 0 for now
+                tx_bytes_per_sec: 0.0,
+                connections: 1,
+                icon_path,
+            });
+        }
+    }
+    
+    // Fallback: use lsof for connection counts per process
+    if results.is_empty() {
+        let lsof = std::process::Command::new("lsof")
+            .args(["-i", "-n", "-P", "-F", "pcn"])
+            .output();
+        
+        if let Ok(out) = lsof {
+            let text = String::from_utf8_lossy(&out.stdout);
+            let mut proc_map: std::collections::HashMap<String, (u32, u32)> = std::collections::HashMap::new();
+            let mut current_name = String::new();
+            let mut current_pid = 0u32;
+            
+            for line in text.lines() {
+                if line.starts_with('p') { current_pid = line[1..].parse().unwrap_or(0); }
+                else if line.starts_with('c') { current_name = line[1..].to_string(); }
+                else if line.starts_with('n') {
+                    let entry = proc_map.entry(current_name.clone()).or_insert((current_pid, 0));
+                    entry.1 += 1;
+                }
+            }
+            
+            for (name, (pid, conns)) in proc_map.iter() {
+                if *conns == 0 { continue; }
+                let icon_path = find_app_icon(name);
+                results.push(ProcessNetStat {
+                    pid: *pid,
+                    name: name.clone(),
+                    rx_bytes_per_sec: 0.0,
+                    tx_bytes_per_sec: 0.0,
+                    connections: *conns,
+                    icon_path,
+                });
+            }
+            results.sort_by(|a, b| b.connections.cmp(&a.connections));
+            results.truncate(15);
+        }
+    }
+    
+    results
+}
+
+fn find_app_icon(process_name: &str) -> Option<String> {
+    let candidates = [
+        format!("/Applications/{}.app/Contents/Resources/AppIcon.icns", process_name),
+        format!("/Applications/{}.app/Contents/Resources/{}.icns", process_name, process_name),
+        format!("/System/Applications/{}.app/Contents/Resources/AppIcon.icns", process_name),
+    ];
+    for path in &candidates {
+        if std::path::Path::new(path).exists() {
+            return Some(path.clone());
+        }
+    }
+    None
 }
