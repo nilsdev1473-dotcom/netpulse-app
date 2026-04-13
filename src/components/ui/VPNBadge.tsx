@@ -57,7 +57,7 @@ export function VPNBadge({ detected, confidence, reason }: VPNBadgeProps) {
               : "bg-emerald-500/15 text-emerald-400/80"
           )}
         >
-          {Math.round(confidence * 100)}%
+          {Math.round(confidence)}%
         </span>
       </div>
 

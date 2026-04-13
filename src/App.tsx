@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { SpeedGauge } from "./components/ui/SpeedGauge";
-import { VPNBadge } from "./components/ui/VPNBadge";
 import { LiquidGlassButton } from "./components/ui/LiquidGlassButton";
 import { NetworkGraph } from "./components/ui/NetworkGraph";
 import "./App.css";
@@ -66,7 +65,6 @@ function maskIp(ip: string): string {
   if (parts.length === 4) {
     return `${parts[0]}.${parts[1]}.***.***`;
   }
-  // IPv6 — just truncate
   if (ip.includes(":")) {
     return ip.slice(0, 8) + "…";
   }
@@ -74,7 +72,6 @@ function maskIp(ip: string): string {
 }
 
 function getPrimaryInterface(interfaces: NetworkInterface[]): NetworkInterface {
-  // Skip loopback; prefer the one with most traffic
   const nonLoopback = interfaces.filter(
     (i) => i.name !== "lo" && i.name !== "lo0" && !i.name.startsWith("loop")
   );
@@ -100,6 +97,24 @@ function stateBg(state: string): string {
   return "rgba(255,170,0,0.12)";
 }
 
+function countryToFlag(code: string): string {
+  if (!code || code.length < 2) return "";
+  const upper = code.toUpperCase().slice(0, 2);
+  try {
+    return String.fromCodePoint(
+      ...upper.split("").map((c) => 0x1f1e0 + c.charCodeAt(0) - 65)
+    );
+  } catch {
+    return "";
+  }
+}
+
+function formatSessionBytes(bytes: number): string {
+  if (bytes >= 1_000_000_000) return `${(bytes / 1_000_000_000).toFixed(2)} GB`;
+  if (bytes >= 1_000_000) return `${(bytes / 1_000_000).toFixed(1)} MB`;
+  return `${(bytes / 1_000).toFixed(0)} KB`;
+}
+
 // ─── Safe invoke wrapper ─────────────────────────────────────────────────────
 
 async function safeInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T | null> {
@@ -119,6 +134,12 @@ export default function App() {
   const prevBytesRef = useRef<{ rx: number; tx: number; t: number }>({ rx: 0, tx: 0, t: 0 });
   const [rxHistory, setRxHistory] = useState<number[]>(Array(60).fill(0));
 
+  // Session bytes received
+  const [sessionBytes, setSessionBytes] = useState(0);
+
+  // Active interface name for bottom bar
+  const [interfaceName, setInterfaceName] = useState("—");
+
   // IP / VPN
   const [ipInfo, setIpInfo] = useState<IpInfo>(PLACEHOLDER_IP);
 
@@ -128,7 +149,7 @@ export default function App() {
   // Speed test
   const [speedResult, setSpeedResult] = useState<number | null>(null);
   const [measuring, setMeasuring] = useState(false);
-  
+
   interface ProcessNetStat {
     pid: number;
     name: string;
@@ -144,24 +165,27 @@ export default function App() {
     const result = await safeInvoke<NetworkInterface[]>("get_network_stats");
     const ifaces = result ?? PLACEHOLDER_INTERFACES;
     const primary = getPrimaryInterface(ifaces);
-    
+
+    setInterfaceName(primary.name);
+
     // Compute real-time speed from byte deltas
     const now = Date.now();
     const prev = prevBytesRef.current;
     const elapsed = prev.t > 0 ? (now - prev.t) / 1000 : 0;
-    
+
     let rxMbps = 0;
     let txMbps = 0;
-    
+
     if (elapsed > 0.1 && prev.t > 0) {
       const rxDelta = Math.max(0, primary.bytes_received - prev.rx);
       const txDelta = Math.max(0, primary.bytes_transmitted - prev.tx);
       rxMbps = parseFloat(((rxDelta * 8) / (elapsed * 1_000_000)).toFixed(2));
       txMbps = parseFloat(((txDelta * 8) / (elapsed * 1_000_000)).toFixed(2));
+      setSessionBytes((sb) => sb + rxDelta);
     }
-    
+
     prevBytesRef.current = { rx: primary.bytes_received, tx: primary.bytes_transmitted, t: now };
-    
+
     setRxSpeed(rxMbps);
     setTxSpeed(txMbps);
     setRxHistory((prev) => {
@@ -212,7 +236,7 @@ export default function App() {
   // ── Process network monitor ──────────────────────────────────────────────
   useEffect(() => {
     const poll = async () => {
-      const procs = await safeInvoke<ProcessNetStat[]>('get_process_network_stats', {});
+      const procs = await safeInvoke<ProcessNetStat[]>("get_process_network_stats", {});
       if (procs && procs.length > 0) setProcesses(procs.slice(0, 12));
     };
     poll();
@@ -238,9 +262,18 @@ export default function App() {
       const { getCurrentWindow } = await import("@tauri-apps/api/window");
       const win = getCurrentWindow();
       const isMax = await win.isMaximized();
-      if (isMax) await win.unmaximize(); else await win.maximize();
+      if (isMax) await win.unmaximize();
+      else await win.maximize();
     } catch {}
   };
+
+  // ── Derived values ────────────────────────────────────────────────────────
+  const maxProcessConnections = Math.max(...processes.map((p) => p.connections), 1);
+  const vpnDetected = ipInfo.vpn_detected;
+  const locationStr =
+    ipInfo.city && ipInfo.country !== "—"
+      ? `${ipInfo.city} ${countryToFlag(ipInfo.country)}`
+      : ipInfo.city || "—";
 
   // ─── Render ────────────────────────────────────────────────────────────────
   return (
@@ -248,7 +281,7 @@ export default function App() {
       style={{
         width: "100vw",
         height: "100vh",
-        background: "#080809",
+        background: "radial-gradient(ellipse at 30% 40%, #0D1117 0%, #080809 100%)",
         display: "flex",
         flexDirection: "column",
         overflow: "hidden",
@@ -260,197 +293,269 @@ export default function App() {
       {/* ── Custom Title Bar ─────────────────────────────────────────────── */}
       <TitleBar onClose={handleClose} onMinimize={handleMinimize} onMaximize={handleMaximize} />
 
-      {/* ── Main Content ─────────────────────────────────────────────────── */}
-      <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-        {/* Zone 1 — VELOCITY (top 30%) */}
+      {/* ── Main Area (flex row) ─────────────────────────────────────────── */}
+      <div style={{ flex: 1, display: "flex", flexDirection: "row", overflow: "hidden", minHeight: 0 }}>
+
+        {/* ── LEFT PANEL (380px) ─────────────────────────────────────────── */}
         <div
           style={{
-            height: "30%",
-            borderBottom: "1px solid rgba(255,255,255,0.07)",
+            width: 380,
+            flexShrink: 0,
             display: "flex",
             flexDirection: "column",
-            padding: "0 16px 8px",
+            borderRight: "1px solid rgba(255,255,255,0.07)",
+            overflow: "hidden",
           }}
         >
-          <ZoneLabel>VELOCITY</ZoneLabel>
-          <div style={{ flex: 1, display: "flex", gap: 12, overflow: "hidden" }}>
-            {/* Gauges */}
-            <div style={{ display: "flex", gap: 4, alignItems: "center", flexShrink: 0 }}>
-              <SpeedGauge
-                value={rxSpeed}
-                max={1000}
-                label="Download"
-                color="#00E5FF"
-                size={150}
-              />
-              <SpeedGauge
-                value={txSpeed}
-                max={1000}
-                label="Upload"
-                color="#00FF87"
-                size={150}
-              />
+          {/* Speed gauges section — 220px */}
+          <div
+            style={{
+              height: 220,
+              flexShrink: 0,
+              display: "flex",
+              flexDirection: "column",
+              padding: "10px 12px 8px",
+              borderBottom: "1px solid rgba(255,255,255,0.07)",
+            }}
+          >
+            {/* Two gauges side by side */}
+            <div style={{ display: "flex", gap: 0, justifyContent: "center", alignItems: "center", flex: 1, minHeight: 0 }}>
+              <SpeedGauge value={rxSpeed} max={1000} label="Download" color="#00E5FF" size={160} />
+              <SpeedGauge value={txSpeed} max={1000} label="Upload" color="#00FF87" size={160} />
             </div>
-            {/* Graph */}
-            <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center", minWidth: 0 }}>
-              <div style={{ fontSize: 9, letterSpacing: "0.12em", color: "rgba(255,255,255,0.3)", marginBottom: 4 }}>
-                DOWNLOAD HISTORY — 30s
-              </div>
+            {/* Network graph */}
+            <div style={{ flexShrink: 0 }}>
               <NetworkGraph data={rxHistory} color="#00E5FF" height={90} />
+            </div>
+          </div>
+
+          {/* VPN + Connection info — remaining height */}
+          <div
+            style={{
+              flex: 1,
+              display: "flex",
+              flexDirection: "column",
+              padding: "10px 12px",
+              gap: 8,
+              overflow: "hidden",
+            }}
+          >
+            {/* VPN Card */}
+            <div
+              style={{
+                background: "rgba(255,255,255,0.04)",
+                border: `1px solid ${vpnDetected ? "rgba(251,191,36,0.25)" : "rgba(0,255,135,0.2)"}`,
+                borderRadius: 8,
+                padding: "10px 12px",
+                display: "flex",
+                flexDirection: "column",
+                gap: 4,
+              }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                {/* Status text */}
+                <span
+                  style={{
+                    fontSize: 16,
+                    fontWeight: 700,
+                    color: vpnDetected ? "#FBB724" : "#00FF87",
+                    letterSpacing: "0.05em",
+                  }}
+                >
+                  {vpnDetected ? "⚠ VPN ACTIVE" : "✓ DIRECT"}
+                </span>
+                {/* ISP name */}
+                <span
+                  style={{
+                    fontSize: 10,
+                    color: "rgba(255,255,255,0.5)",
+                    maxWidth: 140,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                    textAlign: "right",
+                  }}
+                >
+                  {ipInfo.isp || "—"}
+                </span>
+              </div>
+              {/* Location row */}
+              <div style={{ fontSize: 11, color: "rgba(255,255,255,0.4)", letterSpacing: "0.04em" }}>
+                {locationStr}
+              </div>
+            </div>
+
+            {/* 3 metric cards in a row */}
+            <div style={{ display: "flex", gap: 6 }}>
+              <MetricCard label="PING" value="—" color="#00E5FF" />
+              <MetricCard label="CONNS" value={String(connections.length)} color="#00E5FF" />
+              <MetricCard label="SESSION" value={formatSessionBytes(sessionBytes)} color="#00FF87" />
+            </div>
+
+            {/* IP display */}
+            <div
+              style={{
+                background: "rgba(255,255,255,0.04)",
+                border: "1px solid rgba(255,255,255,0.08)",
+                borderRadius: 8,
+                padding: "8px 12px",
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+              }}
+            >
+              <span style={{ fontSize: 9, letterSpacing: "0.1em", color: "rgba(255,255,255,0.3)" }}>IP</span>
+              <span style={{ fontSize: 10, color: "rgba(255,255,255,0.6)", fontFamily: "monospace" }}>
+                {maskIp(ipInfo.ip)}
+              </span>
             </div>
           </div>
         </div>
 
-        {/* Bottom zones */}
-        <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
-          {/* Zone 2 — SHIELD (left 40%) */}
+        {/* ── RIGHT PANEL (fills remaining ~520px) ─────────────────────── */}
+        <div
+          style={{
+            flex: 1,
+            display: "flex",
+            flexDirection: "column",
+            overflow: "hidden",
+          }}
+        >
+          {/* Process Monitor — top ~280px */}
           <div
             style={{
-              width: "40%",
-              borderRight: "1px solid rgba(255,255,255,0.07)",
-              padding: "12px 16px",
+              height: 280,
+              flexShrink: 0,
               display: "flex",
               flexDirection: "column",
-              gap: 10,
-              overflow: "hidden",
+              padding: "10px 14px 8px",
+              borderBottom: "1px solid rgba(255,255,255,0.07)",
             }}
           >
-            <ZoneLabel>SHIELD</ZoneLabel>
-
-            {/* VPN Badge */}
-            <VPNBadge
-              detected={ipInfo.vpn_detected}
-              confidence={ipInfo.vpn_confidence}
-              reason={
-                ipInfo.vpn_detected
-                  ? `Anomaly detected — ${Math.round(ipInfo.vpn_confidence)}% confidence`
-                  : "Direct connection verified"
-              }
-            />
-
-            {/* Connection details */}
             <div
               style={{
-                background: "#0F0F12",
-                border: "1px solid rgba(255,255,255,0.07)",
-                borderRadius: 3,
-                padding: "10px 12px",
-                display: "flex",
-                flexDirection: "column",
-                gap: 6,
+                fontSize: 9,
+                letterSpacing: "0.14em",
+                color: "rgba(255,255,255,0.28)",
+                marginBottom: 8,
+                flexShrink: 0,
               }}
             >
-              <InfoRow label="IP" value={maskIp(ipInfo.ip)} />
-              <InfoRow label="ISP" value={ipInfo.isp || "—"} />
-              <InfoRow label="LOCATION" value={ipInfo.city && ipInfo.country ? `${ipInfo.city}, ${ipInfo.country}` : "—"} />
-              <InfoRow label="TIMEZONE" value={ipInfo.timezone || "—"} />
+              NETWORK ACTIVITY
             </div>
-
-            {/* Active connections count */}
-            <div
-              style={{
-                background: "#0F0F12",
-                border: "1px solid rgba(255,255,255,0.07)",
-                borderRadius: 3,
-                padding: "8px 12px",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-              }}
-            >
-              <span style={{ fontSize: 10, letterSpacing: "0.1em", color: "rgba(255,255,255,0.4)" }}>
-                ACTIVE CONNECTIONS
-              </span>
-              <span
-                style={{
-                  fontSize: 20,
-                  fontWeight: 700,
-                  color: "#00E5FF",
-                  fontFamily: "'JetBrains Mono', monospace",
-                }}
-              >
-                {connections.filter((c) => c.state.toUpperCase() === "ESTABLISHED").length}
-              </span>
-            </div>
-
-            {/* Measure speed */}
-            <div style={{ marginTop: "auto", display: "flex", flexDirection: "column", gap: 8 }}>
-              {speedResult !== null && (
+            <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 0, overflow: "hidden" }}>
+              {processes.length === 0 ? (
                 <div
                   style={{
-                    background: "#0F0F12",
-                    border: "1px solid rgba(0,229,255,0.2)",
-                    borderRadius: 3,
-                    padding: "8px 12px",
-                    textAlign: "center",
+                    flex: 1,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    color: "rgba(255,255,255,0.2)",
+                    fontSize: 11,
+                    letterSpacing: "0.1em",
                   }}
                 >
-                  <span style={{ fontSize: 9, color: "rgba(255,255,255,0.4)", letterSpacing: "0.1em" }}>
-                    MEASURED SPEED
-                  </span>
-                  <div style={{ fontSize: 22, fontWeight: 700, color: "#00E5FF", fontFamily: "monospace" }}>
-                    {speedResult.toFixed(1)}{" "}
-                    <span style={{ fontSize: 12, color: "rgba(255,255,255,0.5)" }}>Mbps</span>
-                  </div>
+                  NO PROCESS DATA
                 </div>
+              ) : (
+                processes.slice(0, 8).map((p) => (
+                  <div
+                    key={p.pid}
+                    style={{
+                      height: 30,
+                      flexShrink: 0,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      padding: "0 4px",
+                      borderRadius: 4,
+                    }}
+                    onMouseEnter={(e) =>
+                      (e.currentTarget.style.background = "rgba(255,255,255,0.03)")
+                    }
+                    onMouseLeave={(e) =>
+                      (e.currentTarget.style.background = "transparent")
+                    }
+                  >
+                    {/* App name */}
+                    <span
+                      style={{
+                        width: 180,
+                        flexShrink: 0,
+                        fontSize: 11,
+                        color: "rgba(255,255,255,0.75)",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {p.name}
+                    </span>
+                    {/* Relative bar */}
+                    <div
+                      style={{
+                        flex: 1,
+                        height: 4,
+                        background: "rgba(255,255,255,0.06)",
+                        borderRadius: 2,
+                        overflow: "hidden",
+                      }}
+                    >
+                      <div
+                        style={{
+                          height: "100%",
+                          width: `${Math.round((p.connections / maxProcessConnections) * 100)}%`,
+                          background: "rgba(0,229,255,0.45)",
+                          borderRadius: 2,
+                          transition: "width 0.4s ease",
+                        }}
+                      />
+                    </div>
+                    {/* Connection count pill */}
+                    <span
+                      style={{
+                        flexShrink: 0,
+                        fontSize: 10,
+                        fontWeight: 700,
+                        color: "#00E5FF",
+                        background: "rgba(0,229,255,0.1)",
+                        border: "1px solid rgba(0,229,255,0.2)",
+                        borderRadius: 4,
+                        padding: "1px 6px",
+                        minWidth: 28,
+                        textAlign: "center",
+                      }}
+                    >
+                      {p.connections}
+                    </span>
+                  </div>
+                ))
               )}
-              <LiquidGlassButton onClick={handleMeasureSpeed} disabled={measuring}>
-                {measuring ? (
-                  <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                    <SpinnerDots /> MEASURING…
-                  </span>
-                ) : (
-                  "⚡ MEASURE SPEED"
-                )}
-              </LiquidGlassButton>
             </div>
           </div>
 
-          {/* Zone 3 — FLOW (right 60%) */}
+          {/* Connection table — bottom ~280px */}
           <div
             style={{
               flex: 1,
-              padding: "12px 16px",
               display: "flex",
               flexDirection: "column",
+              padding: "10px 14px 8px",
               overflow: "hidden",
             }}
           >
-            <ZoneLabel>FLOW</ZoneLabel>
-          {/* Process network usage */}
-          {processes.length > 0 && (
-            <div style={{ marginBottom: 8, padding: '4px 0', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
-              <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.3)', letterSpacing: '0.1em', marginBottom: 4 }}>TOP PROCESSES</div>
-              {processes.slice(0, 5).map((p) => (
-                <div key={p.pid} style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', fontSize: 11, fontFamily: 'monospace' }}>
-                  <span style={{ color: 'rgba(255,255,255,0.7)', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '60%' }}>{p.name}</span>
-                  <span style={{ color: '#00E5FF' }}>{p.connections} conn</span>
-                </div>
-              ))}
-            </div>
-          )}
-
-            {/* Header row */}
             <div
               style={{
-                display: "grid",
-                gridTemplateColumns: "52px 1fr 1fr 80px",
-                gap: 8,
-                padding: "0 8px 6px",
                 fontSize: 9,
-                letterSpacing: "0.1em",
-                color: "rgba(255,255,255,0.25)",
-                borderBottom: "1px solid rgba(255,255,255,0.06)",
-                marginBottom: 2,
+                letterSpacing: "0.14em",
+                color: "rgba(255,255,255,0.28)",
+                marginBottom: 8,
+                flexShrink: 0,
               }}
             >
-              <span>PROTO</span>
-              <span>LOCAL</span>
-              <span>REMOTE</span>
-              <span style={{ textAlign: "right" }}>STATE</span>
+              ACTIVE CONNECTIONS
             </div>
-
-            {/* Connections list */}
             <div
               style={{
                 flex: 1,
@@ -475,12 +580,121 @@ export default function App() {
                   NO ACTIVE CONNECTIONS
                 </div>
               ) : (
-                connections.map((conn, idx) => (
-                  <ConnectionRow key={idx} conn={conn} />
-                ))
+                connections.slice(0, 15).map((conn, idx) => {
+                  const color = stateColor(conn.state);
+                  const bg = stateBg(conn.state);
+                  return (
+                    <div
+                      key={idx}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        padding: "4px 6px",
+                        borderRadius: 4,
+                        gap: 8,
+                      }}
+                      onMouseEnter={(e) =>
+                        (e.currentTarget.style.background = "rgba(255,255,255,0.03)")
+                      }
+                      onMouseLeave={(e) =>
+                        (e.currentTarget.style.background = "transparent")
+                      }
+                    >
+                      {/* Remote address */}
+                      <span
+                        style={{
+                          flex: 1,
+                          fontSize: 10,
+                          color: "rgba(255,255,255,0.55)",
+                          fontFamily: "'JetBrains Mono', monospace",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {conn.remote_addr}
+                      </span>
+                      {/* State badge */}
+                      <span
+                        style={{
+                          flexShrink: 0,
+                          fontSize: 9,
+                          fontWeight: 600,
+                          letterSpacing: "0.05em",
+                          padding: "2px 6px",
+                          borderRadius: 4,
+                          background: bg,
+                          color: color,
+                          fontFamily: "'JetBrains Mono', monospace",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {conn.state.toUpperCase()}
+                      </span>
+                    </div>
+                  );
+                })
               )}
             </div>
           </div>
+        </div>
+      </div>
+
+      {/* ── Bottom Bar (28px, full width) ────────────────────────────────── */}
+      <div
+        style={{
+          height: 28,
+          flexShrink: 0,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          padding: "0 14px",
+          borderTop: "1px solid rgba(255,255,255,0.07)",
+          background: "rgba(8,8,9,0.6)",
+          gap: 12,
+        }}
+      >
+        {/* Left: interface name */}
+        <span
+          style={{
+            fontSize: 10,
+            color: "rgba(255,255,255,0.3)",
+            fontFamily: "'JetBrains Mono', monospace",
+            letterSpacing: "0.08em",
+            minWidth: 60,
+          }}
+        >
+          {interfaceName}
+        </span>
+
+        {/* Center: speed test button */}
+        <LiquidGlassButton onClick={handleMeasureSpeed} disabled={measuring}>
+          {measuring ? (
+            <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
+              <SpinnerDots /> MEASURING…
+            </span>
+          ) : (
+            "⚡ MEASURE SPEED"
+          )}
+        </LiquidGlassButton>
+
+        {/* Right: speed result */}
+        <div style={{ minWidth: 100, textAlign: "right" }}>
+          {speedResult !== null ? (
+            <span
+              style={{
+                fontSize: 11,
+                color: "#00E5FF",
+                fontFamily: "'JetBrains Mono', monospace",
+                fontWeight: 600,
+              }}
+            >
+              ↓ {speedResult.toFixed(1)} Mbps
+            </span>
+          ) : (
+            <span style={{ fontSize: 10, color: "rgba(255,255,255,0.15)" }}>—</span>
+          )}
         </div>
       </div>
     </div>
@@ -489,7 +703,15 @@ export default function App() {
 
 // ─── Sub-components ──────────────────────────────────────────────────────────
 
-function TitleBar({ onClose, onMinimize, onMaximize }: { onClose: () => void; onMinimize: () => void; onMaximize: () => void }) {
+function TitleBar({
+  onClose,
+  onMinimize,
+  onMaximize,
+}: {
+  onClose: () => void;
+  onMinimize: () => void;
+  onMaximize: () => void;
+}) {
   return (
     <div
       style={{
@@ -517,7 +739,6 @@ function TitleBar({ onClose, onMinimize, onMaximize }: { onClose: () => void; on
         NETPULSE
       </span>
 
-      {/* Traffic light dots */}
       <div
         style={{
           display: "flex",
@@ -535,7 +756,15 @@ function TitleBar({ onClose, onMinimize, onMaximize }: { onClose: () => void; on
   );
 }
 
-function TrafficDot({ color, title, onClick }: { color: string; title: string; onClick: () => void }) {
+function TrafficDot({
+  color,
+  title,
+  onClick,
+}: {
+  color: string;
+  title: string;
+  onClick: () => void;
+}) {
   const [hover, setHover] = useState(false);
   return (
     <button
@@ -558,131 +787,52 @@ function TrafficDot({ color, title, onClick }: { color: string; title: string; o
   );
 }
 
-function ZoneLabel({ children }: { children: React.ReactNode }) {
+function MetricCard({
+  label,
+  value,
+  color = "#00E5FF",
+}: {
+  label: string;
+  value: string;
+  color?: string;
+}) {
   return (
     <div
       style={{
-        fontSize: 10,
-        letterSpacing: "0.14em",
-        color: "rgba(255,255,255,0.25)",
-        padding: "6px 0 4px",
-        fontFamily: "'JetBrains Mono', monospace",
+        flex: 1,
+        background: "rgba(255,255,255,0.04)",
+        border: "1px solid rgba(255,255,255,0.08)",
+        borderRadius: 8,
+        padding: "8px 10px",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        gap: 3,
       }}
     >
-      {children}
-    </div>
-  );
-}
-
-function InfoRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-      <span style={{ fontSize: 9, letterSpacing: "0.1em", color: "rgba(255,255,255,0.3)" }}>
+      <span
+        style={{
+          fontSize: 8,
+          letterSpacing: "0.12em",
+          color: "rgba(255,255,255,0.3)",
+        }}
+      >
         {label}
       </span>
       <span
         style={{
-          fontSize: 11,
-          color: "rgba(255,255,255,0.75)",
+          fontSize: 14,
+          fontWeight: 700,
+          color,
           fontFamily: "'JetBrains Mono', monospace",
-          maxWidth: "60%",
+          whiteSpace: "nowrap",
           overflow: "hidden",
           textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-          textAlign: "right",
+          maxWidth: "100%",
+          textAlign: "center",
         }}
       >
         {value}
-      </span>
-    </div>
-  );
-}
-
-function ConnectionRow({ conn }: { conn: Connection }) {
-  const color = stateColor(conn.state);
-  const bg = stateBg(conn.state);
-
-  return (
-    <div
-      style={{
-        display: "grid",
-        gridTemplateColumns: "52px 1fr 1fr 80px",
-        gap: 8,
-        padding: "4px 8px",
-        borderRadius: 2,
-        alignItems: "center",
-        background: "transparent",
-        transition: "background 0.1s",
-      }}
-      onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.03)")}
-      onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-    >
-      {/* Protocol badge */}
-      <span
-        style={{
-          fontSize: 9,
-          fontWeight: 700,
-          letterSpacing: "0.08em",
-          padding: "2px 5px",
-          borderRadius: 2,
-          background: "rgba(255,255,255,0.06)",
-          color: "rgba(255,255,255,0.6)",
-          textAlign: "center",
-          fontFamily: "'JetBrains Mono', monospace",
-          display: "inline-block",
-          width: "fit-content",
-        }}
-      >
-        {conn.protocol.toUpperCase()}
-      </span>
-
-      {/* Local addr */}
-      <span
-        style={{
-          fontSize: 10,
-          color: "rgba(255,255,255,0.55)",
-          fontFamily: "'JetBrains Mono', monospace",
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-        }}
-      >
-        {conn.local_addr}
-      </span>
-
-      {/* Remote addr */}
-      <span
-        style={{
-          fontSize: 10,
-          color: "rgba(255,255,255,0.55)",
-          fontFamily: "'JetBrains Mono', monospace",
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-        }}
-      >
-        {conn.remote_addr}
-      </span>
-
-      {/* State badge */}
-      <span
-        style={{
-          fontSize: 9,
-          fontWeight: 600,
-          letterSpacing: "0.06em",
-          padding: "2px 5px",
-          borderRadius: 2,
-          background: bg,
-          color: color,
-          textAlign: "center",
-          fontFamily: "'JetBrains Mono', monospace",
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-          display: "block",
-        }}
-      >
-        {conn.state.toUpperCase()}
       </span>
     </div>
   );
