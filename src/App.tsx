@@ -703,6 +703,27 @@ export default function App() {
 
 // ─── Sub-components ──────────────────────────────────────────────────────────
 
+
+function ClockDisplay() {
+  const [time, setTime] = useState(() => new Date().toTimeString().slice(0, 8));
+  useEffect(() => {
+    const t = setInterval(() => setTime(new Date().toTimeString().slice(0, 8)), 1000);
+    return () => clearInterval(t);
+  }, []);
+  return (
+    <span style={{
+      fontSize: 10,
+      color: "rgba(255,255,255,0.3)",
+      fontFamily: "'JetBrains Mono', monospace",
+      letterSpacing: "0.05em",
+      // @ts-expect-error
+      WebkitAppRegion: "no-drag",
+    }}>
+      {time}
+    </span>
+  );
+}
+
 function TitleBar({
   onClose,
   onMinimize,
@@ -725,20 +746,10 @@ function TitleBar({
         // @ts-expect-error – Tauri/Electron drag region
         WebkitAppRegion: "drag",
         flexShrink: 0,
+        position: "relative",
       }}
     >
-      <span
-        style={{
-          fontSize: 11,
-          fontWeight: 700,
-          letterSpacing: "0.18em",
-          color: "#00E5FF",
-          fontFamily: "'JetBrains Mono', monospace",
-        }}
-      >
-        NETPULSE
-      </span>
-
+      {/* Traffic lights — LEFT (macOS standard) */}
       <div
         style={{
           display: "flex",
@@ -752,6 +763,25 @@ function TitleBar({
         <TrafficDot color="#FFBD2E" title="Minimize" onClick={onMinimize} />
         <TrafficDot color="#27C93F" title="Maximize" onClick={onMaximize} />
       </div>
+
+      {/* App name — CENTER */}
+      <span
+        style={{
+          fontSize: 11,
+          fontWeight: 600,
+          letterSpacing: "0.15em",
+          color: "rgba(255,255,255,0.45)",
+          fontFamily: "'JetBrains Mono', monospace",
+          position: "absolute",
+          left: "50%",
+          transform: "translateX(-50%)",
+        }}
+      >
+        NETPULSE
+      </span>
+
+      {/* Clock — RIGHT */}
+      <ClockDisplay />
     </div>
   );
 }
